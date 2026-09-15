@@ -1,0 +1,132 @@
+[project]
+name = "lexiclear-api"
+version = "1.0.0"
+description = "LexiClear API - GenAI-powered legal document comprehension"
+# The project README lives at the repository root, outside this package root,
+# so it is referenced by URL in the metadata rather than bundled.
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+    "fastapi==0.141.1",
+    # Pinned above what FastAPI requires: the version it allows by default
+    # still carries open advisories.
+    "starlette==1.6.0",
+    "uvicorn[standard]==0.53.0",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "python-multipart==0.0.32",
+    "google-genai==2.23.0",
+    "pypdf==6.18.1",
+    "python-docx==1.2.0",
+    "numpy==2.4.6",
+    "slowapi==0.1.10",
+    "structlog==26.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "httpx==0.28.1",
+    "ruff==0.16.7",
+    "mypy==2.3.1",
+    "bandit[toml]==1.9.4",
+    "pip-audit==2.9.0",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "A",         # builtins shadowing
+    "C4",        # comprehensions
+    "SIM",       # simplify
+    "TID",       # tidy imports
+    "PTH",       # use pathlib
+    "RUF",       # ruff-specific
+    "S",         # bandit security rules
+    "ANN",       # type annotations
+    "D",         # docstrings
+    "ASYNC",     # async correctness
+]
+ignore = [
+    "D203",   # conflicts with D211
+    "D213",   # conflicts with D212
+    "ANN401", # typing.Any is correct for a decoded JSON payload
+    "RUF001", # real documents contain smart quotes and full-width punctuation,
+              # and matching them is the point of the patterns that hold them
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are held to the same standards except where the ceremony adds noise:
+# `assert` is the point of a test, fixtures are self-describing, and the
+# scripted doubles deliberately mirror a third-party signature.
+"tests/**" = [
+    "S101",   # assert is how a test asserts
+    "D",      # class/method docstrings on test cases duplicate their names
+    "ANN",    # fixtures and doubles are typed by their call sites
+    "PLR2004",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+no_implicit_reexport = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pypdf.*", "docx.*", "slowapi.*", "google.genai.*"]
+ignore_missing_imports = true
+
+# Application code is checked strictly. Test code is checked for real type
+# errors but not for annotation completeness: a fixture's type is evident
+# from its return statement, and annotating every test case adds ceremony
+# without catching defects.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+warn_return_any = false
+check_untyped_defs = true
+disallow_untyped_calls = false
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+
+[tool.coverage.run]
+branch = true
+omit = ["app/__main__.py"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]

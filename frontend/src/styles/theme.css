@@ -1,0 +1,127 @@
+/*
+ * Design tokens.
+ *
+ * The palette is bright and saturated, but every foreground/background pair
+ * used for text meets WCAG 2.1 AA (4.5:1 for body text, 3:1 for large text and
+ * non-text indicators). Soft elevation is expressed with shadows *and* a
+ * one-pixel border, because a shadow alone disappears in Windows High Contrast
+ * mode and for anyone who cannot resolve low-contrast edges.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutral ground, tinted lilac */
+  --surface-page: #f6f4fb;
+  --surface-raised: #ffffff;
+  --surface-sunken: #efecf7;
+  --surface-hover: #e9e5f5;
+
+  --border-subtle: #d8d2e8;
+  --border-strong: #a79fc4;
+
+  --text-primary: #1c1830;      /* 15.8:1 on --surface-raised */
+  --text-secondary: #504a6b;    /*  7.6:1 on --surface-raised */
+  --text-inverse: #ffffff;
+
+  /* Bright accents, all AA against --surface-raised */
+  --accent-indigo: #4a3aff;
+  --accent-indigo-strong: #2f22c9;
+  --accent-pink: #c2185b;
+  --accent-mint: #047857;
+  --accent-amber: #9a5b00;
+  --accent-cyan: #0e6f8a;
+
+  --accent-indigo-wash: #eae7ff;
+  --accent-pink-wash: #fde8ef;
+  --accent-mint-wash: #dff5ec;
+  --accent-amber-wash: #fdf0dc;
+
+  --focus-ring: #2f22c9;
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+
+  /* Soft extrusion: light from the top-left, as in the raised-panel idiom. */
+  --shadow-raised: 6px 6px 16px rgb(97 84 158 / 14%), -6px -6px 14px rgb(255 255 255 / 90%);
+  --shadow-raised-sm: 3px 3px 8px rgb(97 84 158 / 12%), -3px -3px 7px rgb(255 255 255 / 85%);
+  --shadow-inset: inset 3px 3px 7px rgb(97 84 158 / 16%),
+    inset -3px -3px 6px rgb(255 255 255 / 85%);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --max-measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-page: #16131f;
+    --surface-raised: #211d2e;
+    --surface-sunken: #191524;
+    --surface-hover: #2b2640;
+
+    --border-subtle: #3a3450;
+    --border-strong: #6b6291;
+
+    --text-primary: #f2effa;      /* 14.2:1 on --surface-raised */
+    --text-secondary: #bcb4d6;    /*  7.4:1 on --surface-raised */
+    --text-inverse: #16131f;
+
+    --accent-indigo: #a99bff;
+    --accent-indigo-strong: #c3b8ff;
+    --accent-pink: #ff8fb4;
+    --accent-mint: #59d3a8;
+    --accent-amber: #efb256;
+    --accent-cyan: #63c6e3;
+
+    --accent-indigo-wash: #2c2545;
+    --accent-pink-wash: #3d2130;
+    --accent-mint-wash: #143a30;
+    --accent-amber-wash: #3a2c14;
+
+    --focus-ring: #c3b8ff;
+
+    --shadow-raised: 6px 6px 16px rgb(0 0 0 / 45%), -5px -5px 12px rgb(255 255 255 / 4%);
+    --shadow-raised-sm: 3px 3px 8px rgb(0 0 0 / 40%), -3px -3px 6px rgb(255 255 255 / 4%);
+    --shadow-inset: inset 3px 3px 7px rgb(0 0 0 / 50%),
+      inset -3px -3px 6px rgb(255 255 255 / 5%);
+  }
+}
+
+/* Honour the operating system's reduced-motion preference everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Windows High Contrast mode: replace shadow-only affordances with borders. */
+@media (forced-colors: active) {
+  :root {
+    --shadow-raised: none;
+    --shadow-raised-sm: none;
+    --shadow-inset: none;
+  }
+
+  .panel,
+  .button,
+  .finding {
+    border: 1px solid CanvasText;
+  }
+}

@@ -1,0 +1,35 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage
+
+# Node
+node_modules/
+dist/
+.tsbuild/
+coverage/
+*.tsbuildinfo
+
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Built web client, copied into the image by the Docker build
+backend/app/static/

@@ -1,0 +1,26 @@
+services:
+  lexiclear:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lexiclear:local
+    ports:
+      - '8000:7860'
+    environment:
+      LEXICLEAR_ENVIRONMENT: ${LEXICLEAR_ENVIRONMENT:-development}
+      LEXICLEAR_LLM_PROVIDER: ${LEXICLEAR_LLM_PROVIDER:-gemini}
+      LEXICLEAR_GOOGLE_API_KEY: ${LEXICLEAR_GOOGLE_API_KEY:-}
+      LEXICLEAR_CORS_ALLOW_ORIGINS: ${LEXICLEAR_CORS_ALLOW_ORIGINS:-http://localhost:8000}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7860/api/v1/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

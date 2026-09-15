@@ -1,0 +1,1 @@
+"""LexiClear API application package."""
