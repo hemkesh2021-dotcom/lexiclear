@@ -9,6 +9,7 @@ tree; see ``SECURITY.md``.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -17,12 +18,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 Environment = Literal["development", "test", "production"]
 LlmProviderName = Literal["gemini", "mock"]
 
+#: ``.env`` locations, resolved from this file rather than the working
+#: directory, so settings load the same whether the server is started from the
+#: repository root, from ``backend/``, or by ``make dev``. Later files win.
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+ENV_FILES: tuple[Path, ...] = (_BACKEND_DIR.parent / ".env", _BACKEND_DIR / ".env")
+
 
 class Settings(BaseSettings):
     """Validated runtime configuration for the LexiClear API."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILES,
         env_file_encoding="utf-8",
         env_prefix="LEXICLEAR_",
         extra="ignore",
