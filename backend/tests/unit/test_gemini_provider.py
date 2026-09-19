@@ -225,3 +225,150 @@ class TestGenerationConfig:
         provider = build(settings, models, monkeypatch)
         await provider.generate_json(system_instruction="s", prompt="p", response_schema={})
         assert models.last_model == settings.generation_model == "gemini-3.6-flash"
+
+
+def api_error(code: int):
+    from google.genai import errors
+
+    status = {
+        404: "NOT_FOUND",
+        400: "INVALID_ARGUMENT",
+        429: "RESOURCE_EXHAUSTED",
+        503: "UNAVAILABLE",
+    }
+    return errors.APIError(code, {"error": {"code": code, "message": "x", "status": status[code]}})
+
+
+class ScriptedModels(FakeModels):
+    """Fails per model according to a script, then answers."""
+
+    def __init__(self, script):
+        super().__init__()
+        self.script = script  # model -> list of exceptions (or None for success)
+        self.calls_by_model: dict[str, int] = {}
+
+    async def generate_content(self, *, model, contents, config):
+        del contents, config
+        self.calls_by_model[model] = self.calls_by_model.get(model, 0) + 1
+        outcomes = self.script.get(model, [None])
+        outcome = outcomes.pop(0) if outcomes else None
+        if outcome is not None:
+            raise outcome
+        return SimpleNamespace(text=f'{{"model": "{model}"}}')
+
+
+class TestTransientClassification:
+    @pytest.mark.parametrize("code", [429, 503])
+    def test_overload_and_rate_limits_are_transient(self, code):
+        from app.llm.gemini import is_transient
+
+        assert is_transient(api_error(code))
+
+    @pytest.mark.parametrize("code", [400, 404])
+    def test_bad_requests_and_missing_models_are_permanent(self, code):
+        from app.llm.gemini import is_transient
+
+        assert not is_transient(api_error(code))
+
+    def test_timeouts_are_transient(self):
+        from app.llm.gemini import is_transient
+
+        assert is_transient(TimeoutError())
+
+    def test_backoff_grows_and_is_capped(self):
+        from app.llm.gemini import _RETRY_MAX_DELAY_SECONDS, backoff_delay
+
+        assert backoff_delay(0) <= backoff_delay(10) <= _RETRY_MAX_DELAY_SECONDS
+
+
+class TestModelFallback:
+    @pytest.fixture
+    def chained(self, settings):
+        return settings.model_copy(
+            update={"generation_model": "primary", "fallback_models": ("backup",)}
+        )
+
+    async def test_a_retired_model_fails_fast_and_falls_back(self, chained, monkeypatch):
+        models = ScriptedModels({"primary": [api_error(404)]})
+        provider = build(chained, models, monkeypatch)
+        result = await provider.generate_json(
+            system_instruction="s", prompt="p", response_schema={}
+        )
+        assert result == {"model": "backup"}
+        assert models.calls_by_model == {"primary": 1, "backup": 1}  # no retries on a 404
+
+    async def test_an_overloaded_model_is_retried_before_falling_back(self, chained, monkeypatch):
+        busy = [api_error(503), api_error(503), api_error(503)]
+        models = ScriptedModels({"primary": busy})
+        provider = build(chained, models, monkeypatch)
+        result = await provider.generate_json(
+            system_instruction="s", prompt="p", response_schema={}
+        )
+        assert result == {"model": "backup"}
+        assert models.calls_by_model["primary"] == chained.llm_max_retries
+
+    async def test_a_brief_spike_recovers_on_the_primary(self, chained, monkeypatch):
+        models = ScriptedModels({"primary": [api_error(503), None]})
+        provider = build(chained, models, monkeypatch)
+        result = await provider.generate_json(
+            system_instruction="s", prompt="p", response_schema={}
+        )
+        assert result == {"model": "primary"}
+        assert "backup" not in models.calls_by_model
+
+    async def test_the_whole_chain_failing_gives_a_client_safe_message(self, chained, monkeypatch):
+        models = ScriptedModels({"primary": [api_error(503)] * 3, "backup": [api_error(503)] * 3})
+        provider = build(chained, models, monkeypatch)
+        with pytest.raises(LlmUnavailableError) as caught:
+            await provider.generate_json(system_instruction="s", prompt="p", response_schema={})
+        assert "busy" in caught.value.message
+        assert "503" not in caught.value.message
+
+    def test_the_model_chain_is_deduplicated(self, settings, monkeypatch):
+        dup = settings.model_copy(
+            update={"generation_model": "a", "fallback_models": ("b", "a", "b")}
+        )
+        assert build(dup, FakeModels(), monkeypatch).models == ("a", "b")
+
+    def test_fallback_models_accept_a_comma_separated_env_value(self, monkeypatch):
+        monkeypatch.setenv("LEXICLEAR_FALLBACK_MODELS", "model-b, model-c")
+        assert Settings(_env_file=None).fallback_models == ("model-b", "model-c")
+
+
+class TestStreamFallback:
+    async def test_a_stream_that_fails_before_output_falls_back(self, settings, monkeypatch):
+        class FlakyStream(FakeModels):
+            async def generate_content_stream(self, *, model, contents, config):
+                if model == "primary":
+                    raise api_error(503)
+
+                async def iterator():
+                    yield SimpleNamespace(text="from backup")
+
+                return iterator()
+
+        chained = settings.model_copy(
+            update={"generation_model": "primary", "fallback_models": ("backup",)}
+        )
+        provider = build(chained, FlakyStream(), monkeypatch)
+        text = [f async for f in provider.generate_stream(system_instruction="s", prompt="p")]
+        assert text == ["from backup"]
+
+    async def test_a_stream_that_fails_midway_does_not_splice_answers(self, settings, monkeypatch):
+        class MidwayFailure(FakeModels):
+            async def generate_content_stream(self, *, model, contents, config):
+                async def iterator():
+                    yield SimpleNamespace(text=f"partial from {model}")
+                    raise api_error(503)
+
+                return iterator()
+
+        chained = settings.model_copy(
+            update={"generation_model": "primary", "fallback_models": ("backup",)}
+        )
+        provider = build(chained, MidwayFailure(), monkeypatch)
+        seen: list[str] = []
+        with pytest.raises(LlmUnavailableError):
+            async for fragment in provider.generate_stream(system_instruction="s", prompt="p"):
+                seen.append(fragment)
+        assert seen == ["partial from primary"]

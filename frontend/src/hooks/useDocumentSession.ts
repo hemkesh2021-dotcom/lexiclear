@@ -12,6 +12,8 @@ export interface DocumentSession {
   readonly analysis: DocumentAnalysis | null;
   readonly error: string | null;
   submit: (file: File) => Promise<void>;
+  /** Re-run analysis on the document already uploaded, without re-uploading. */
+  retryAnalysis: () => Promise<void>;
   reset: () => Promise<void>;
 }
 
@@ -44,6 +46,20 @@ export function useDocumentSession(
   const abortRef = useRef<AbortController | null>(null);
   const currentIdRef = useRef<string | null>(null);
 
+  const runAnalysis = useCallback(
+    async (documentId: string, controller: AbortController) => {
+      const result = await analyseDocument(documentId, controller.signal);
+      if (controller.signal.aborted) return;
+      setAnalysis(result);
+      setPhase('ready');
+      onAnnounce(
+        `Analysis complete. ${result.findings.length} clauses to review and ` +
+          `${result.obligations.length} obligations found. Results are below.`,
+      );
+    },
+    [onAnnounce],
+  );
+
   const submit = useCallback(
     async (file: File) => {
       abortRef.current?.abort();
@@ -67,14 +83,7 @@ export function useDocumentSession(
         setPhase('analysing');
         onAnnounce(`${uploaded.filename} uploaded. Reading the document now.`);
 
-        const result = await analyseDocument(uploaded.document_id, controller.signal);
-        if (controller.signal.aborted) return;
-        setAnalysis(result);
-        setPhase('ready');
-        onAnnounce(
-          `Analysis complete. ${result.findings.length} clauses to review and ` +
-            `${result.obligations.length} obligations found. Results are below.`,
-        );
+        await runAnalysis(uploaded.document_id, controller);
       } catch (caught) {
         if (controller.signal.aborted) return;
         const message = messageFor(caught);
@@ -83,8 +92,28 @@ export function useDocumentSession(
         onAnnounce(`Something went wrong. ${message}`);
       }
     },
-    [onAnnounce],
+    [onAnnounce, runAnalysis],
   );
+
+  const retryAnalysis = useCallback(async () => {
+    const documentId = currentIdRef.current;
+    if (!documentId) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setError(null);
+    setPhase('analysing');
+    onAnnounce('Trying the analysis again.');
+    try {
+      await runAnalysis(documentId, controller);
+    } catch (caught) {
+      if (controller.signal.aborted) return;
+      const message = messageFor(caught);
+      setError(message);
+      setPhase('error');
+      onAnnounce(`Something went wrong. ${message}`);
+    }
+  }, [onAnnounce, runAnalysis]);
 
   const reset = useCallback(async () => {
     abortRef.current?.abort();
@@ -98,5 +127,5 @@ export function useDocumentSession(
     if (documentId) await deleteDocument(documentId);
   }, [onAnnounce]);
 
-  return { phase, summary, analysis, error, submit, reset };
+  return { phase, summary, analysis, error, submit, retryAnalysis, reset };
 }

@@ -149,6 +149,35 @@ describe('App', () => {
     expect(screen.getByLabelText(/Choose a document/)).toBeEnabled();
   });
 
+  it('offers to retry an analysis that failed after a successful upload', async () => {
+    const user = userEvent.setup();
+    let analysisCalls = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/documents' && init?.method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify(summaryFixture), { status: 201 }));
+      }
+      if (url.endsWith('/analysis')) {
+        analysisCalls += 1;
+        return Promise.resolve(
+          analysisCalls === 1
+            ? new Response(JSON.stringify({ code: 'llm_unavailable', message: 'Busy.' }), {
+                status: 503,
+              })
+            : new Response(JSON.stringify(analysisFixture), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    render(<App />);
+
+    await user.upload(screen.getByLabelText(/Choose a document/), contract());
+    await user.click(await screen.findByRole('button', { name: 'Try the analysis again' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Residential rental agreement' }),
+    ).toBeInTheDocument();
+  });
+
   it('has no detectable accessibility violations before upload', async () => {
     const { container } = render(<App />);
     await expectNoAxeViolations(container);

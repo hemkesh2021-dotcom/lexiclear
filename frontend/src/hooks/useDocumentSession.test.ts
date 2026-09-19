@@ -130,6 +130,48 @@ describe('useDocumentSession', () => {
     expect(result.current.error).toBe('Something went wrong. Please try again.');
   });
 
+  it('retries a failed analysis without uploading again', async () => {
+    let analysisCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/analysis')) {
+        analysisCalls += 1;
+        return Promise.resolve(
+          analysisCalls === 1
+            ? new Response(
+                JSON.stringify({ code: 'llm_unavailable', message: 'Busy, try again.' }),
+                { status: 503 },
+              )
+            : new Response(JSON.stringify(analysisFixture), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(summaryFixture), { status: 201 }));
+    });
+    const { result } = renderHook(() => useDocumentSession(vi.fn()));
+
+    await act(async () => {
+      await result.current.submit(file());
+    });
+    expect(result.current.phase).toBe('error');
+
+    await act(async () => {
+      await result.current.retryAnalysis();
+    });
+
+    expect(result.current.phase).toBe('ready');
+    expect(result.current.analysis).toEqual(analysisFixture);
+    const uploads = fetchMock.mock.calls.filter((call) => call[0] === '/api/v1/documents');
+    expect(uploads).toHaveLength(1);
+  });
+
+  it('does nothing when asked to retry before anything was uploaded', async () => {
+    const { result } = renderHook(() => useDocumentSession(vi.fn()));
+    await act(async () => {
+      await result.current.retryAnalysis();
+    });
+    expect(result.current.phase).toBe('idle');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('returns to idle and clears everything on reset', async () => {
     happyPath();
     const { result } = renderHook(() => useDocumentSession(vi.fn()));

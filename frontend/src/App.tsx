@@ -20,7 +20,7 @@ import { useDocumentSession } from '@/hooks/useDocumentSession';
 export function App(): React.ReactElement {
   const announcer = useAnnouncer();
   const session = useDocumentSession(announcer.announce);
-  const { submit, reset } = session;
+  const { submit, reset, retryAnalysis } = session;
 
   const handleSubmit = useCallback(
     (file: File) => {
@@ -28,6 +28,10 @@ export function App(): React.ReactElement {
     },
     [submit],
   );
+
+  const handleRetry = useCallback(() => {
+    void retryAnalysis();
+  }, [retryAnalysis]);
 
   const handleClear = useCallback(() => {
     void reset();
@@ -77,6 +81,7 @@ export function App(): React.ReactElement {
               phase={session.phase}
               error={session.error}
               onSubmit={handleSubmit}
+              onRetry={session.summary ? handleRetry : undefined}
             />
           </div>
         )}

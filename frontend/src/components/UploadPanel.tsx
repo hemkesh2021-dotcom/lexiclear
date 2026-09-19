@@ -8,6 +8,8 @@ interface UploadPanelProps {
   readonly phase: SessionPhase;
   readonly error: string | null;
   readonly onSubmit: (file: File) => void;
+  /** Offered when the upload succeeded but the analysis did not. */
+  readonly onRetry?: (() => void) | undefined;
 }
 
 const ACCEPTED = '.pdf,.docx,.txt,application/pdf,text/plain';
@@ -26,6 +28,7 @@ export function UploadPanel({
   phase,
   error,
   onSubmit,
+  onRetry,
 }: UploadPanelProps): React.ReactElement {
   const inputId = useId();
   const describedById = useId();
@@ -108,6 +111,14 @@ export function UploadPanel({
         </StatusMessage>
       )}
       {error !== null && <StatusMessage tone="error">{error}</StatusMessage>}
+      {error !== null && onRetry && (
+        <p>
+          <button type="button" className="button button--primary" onClick={onRetry}>
+            Try the analysis again
+          </button>{' '}
+          <span className="panel__hint">Your document is still uploaded.</span>
+        </p>
+      )}
     </section>
   );
 }

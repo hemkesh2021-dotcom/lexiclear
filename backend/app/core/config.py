@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     llm_provider: LlmProviderName = "gemini"
     google_api_key: SecretStr = SecretStr("")
     generation_model: str = "gemini-3.6-flash"
+    # Tried in order when the primary model is overloaded or unavailable.
+    fallback_models: Annotated[tuple[str, ...], NoDecode] = ()
+    llm_max_retries: int = Field(default=3, ge=1, le=6)
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
     llm_timeout_seconds: float = 60.0
@@ -77,10 +80,10 @@ class Settings(BaseSettings):
     rate_limit_questions: str = "40/minute"
     redact_pii_before_llm: bool = True
 
-    @field_validator("cors_allow_origins", mode="before")
+    @field_validator("cors_allow_origins", "fallback_models", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
-        """Allow a comma-separated string for the CORS allow-list."""
+        """Allow a comma-separated string for list-valued settings."""
         if isinstance(value, str):
             return tuple(origin.strip() for origin in value.split(",") if origin.strip())
         return value

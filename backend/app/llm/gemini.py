@@ -8,16 +8,30 @@ families are used:
   enforced by the decoding process rather than by parsing prose afterwards.
 * ``gemini-embedding-001`` for passage and query embeddings, truncated to 768
   dimensions, which keeps the in-memory index small with negligible recall loss.
+
+Resilience matters more here than in most services, because a demand spike on
+a hosted model is indistinguishable, to the person waiting, from the product
+being broken. Every generation call therefore:
+
+* retries only *transient* failures (rate limits, overload, timeouts) with
+  exponential back-off and jitter, and fails fast on permanent ones such as a
+  retired model name, so a misconfiguration surfaces in one second rather than
+  after a long silent retry loop;
+* falls through an ordered list of models (``generation_model`` then
+  ``fallback_models``), so one overloaded model degrades the answer's source
+  rather than the user's experience.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import random
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from app.core.config import Settings
@@ -30,12 +44,45 @@ _logger = get_logger(__name__)
 #: Safety settings are left at the API defaults.  Legal documents legitimately
 #: describe disputes, penalties and liabilities, so the thresholds are not
 #: tightened further; the guardrail that matters here is the system instruction.
-_MAX_RETRIES = 3
+
+#: HTTP statuses worth retrying: rate limiting and server-side overload.
+_TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 #: Automatic function calling is on by default in the SDK. LexiClear declares
 #: no tools, so leaving it on only adds a logged warning and per-call overhead.
 _NO_TOOL_CALLING = genai_types.AutomaticFunctionCallingConfig(disable=True)
-_RETRY_BASE_DELAY_SECONDS = 0.5
+_RETRY_BASE_DELAY_SECONDS = 1.0
+_RETRY_MAX_DELAY_SECONDS = 8.0
+
+
+def is_transient(error: BaseException) -> bool:
+    """Return whether ``error`` is worth retrying against the same model.
+
+    Args:
+        error: The exception raised by the SDK or by the timeout guard.
+
+    Returns:
+        ``True`` for rate limits, overload and timeouts; ``False`` for failures
+        that will recur on every attempt, such as an unknown model or a
+        malformed request.
+    """
+    if isinstance(error, TimeoutError):
+        return True
+    if isinstance(error, genai_errors.APIError):
+        return error.code in _TRANSIENT_STATUS_CODES
+    # Transport-level failures (reset connections, DNS hiccups) surface as
+    # assorted exception types and are worth one more attempt.
+    return not isinstance(error, ValueError | TypeError | KeyError)
+
+
+def backoff_delay(attempt: int) -> float:
+    """Exponential back-off with full jitter, capped.
+
+    Jitter spreads retries from many clients apart, which is what stops a
+    demand spike from being prolonged by everyone retrying in lock-step.
+    """
+    ceiling = min(_RETRY_MAX_DELAY_SECONDS, _RETRY_BASE_DELAY_SECONDS * (2**attempt))
+    return random.uniform(ceiling / 2, ceiling)  # noqa: S311 - jitter, not cryptography
 
 
 class GeminiProvider:
@@ -63,6 +110,12 @@ class GeminiProvider:
     def name(self) -> str:
         """Identify the provider and generation model in health output."""
         return f"gemini:{self._settings.generation_model}"
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        """Generation models to try, in order of preference, without duplicates."""
+        ordered = (self._settings.generation_model, *self._settings.fallback_models)
+        return tuple(dict.fromkeys(model for model in ordered if model))
 
     def _base_config(self, *, system_instruction: str, temperature: float) -> dict[str, object]:
         """Settings shared by every generation call."""
@@ -112,44 +165,46 @@ class GeminiProvider:
         prompt: str,
         config: genai_types.GenerateContentConfig,
     ) -> str:
-        """Invoke the model with bounded exponential back-off.
+        """Invoke the model chain with retries and fallback.
 
         Args:
             prompt: The user-turn content.
             config: Generation configuration including the response schema.
 
         Returns:
-            The raw text of the model reply.
+            The raw text of the first successful model reply.
 
         Raises:
-            LlmUnavailableError: After the retry budget is exhausted.
+            LlmUnavailableError: When every model in the chain has failed.
         """
-        last_error: Exception | None = None
-        for attempt in range(_MAX_RETRIES):
-            try:
-                response = await asyncio.wait_for(
-                    self._client.aio.models.generate_content(
-                        model=self._settings.generation_model,
-                        contents=prompt,
-                        config=config,
-                    ),
-                    timeout=self._settings.llm_timeout_seconds,
-                )
-                text = (response.text or "").strip()
-                if text:
-                    return text
-                last_error = ValueError("Model returned an empty response.")
-            except Exception as exc:
-                # Transport errors, quota refusals and timeouts all surface as
-                # different SDK exception classes; every one of them is worth
-                # one more attempt, and none of them should reach the client.
-                last_error = exc
-                _logger.warning("gemini_call_failed", attempt=attempt + 1, error=str(exc))
-            if attempt < _MAX_RETRIES - 1:
-                await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * (2**attempt))
+        last_error: BaseException | None = None
+        for model in self.models:
+            for attempt in range(self._settings.llm_max_retries):
+                try:
+                    response = await asyncio.wait_for(
+                        self._client.aio.models.generate_content(
+                            model=model, contents=prompt, config=config
+                        ),
+                        timeout=self._settings.llm_timeout_seconds,
+                    )
+                    text = (response.text or "").strip()
+                    if text:
+                        if model != self._settings.generation_model:
+                            _logger.info("gemini_fallback_used", model=model)
+                        return text
+                    last_error = ValueError("Model returned an empty response.")
+                except Exception as exc:
+                    last_error = exc
+                    _logger.warning(
+                        "gemini_call_failed", model=model, attempt=attempt + 1, error=str(exc)
+                    )
+                    if not is_transient(exc):
+                        break  # a permanent failure: try the next model at once
+                if attempt < self._settings.llm_max_retries - 1:
+                    await asyncio.sleep(backoff_delay(attempt))
 
         raise LlmUnavailableError(
-            "The analysis service is temporarily unavailable. Please try again shortly.",
+            "The analysis service is busy right now. Please try again in a minute.",
             detail=str(last_error),
         )
 
@@ -161,26 +216,39 @@ class GeminiProvider:
         prompt: str,
         temperature: float = 0.2,
     ) -> AsyncIterator[str]:
-        """Stream a free-text reply. See the protocol docstring."""
+        """Stream a free-text reply. See the protocol docstring.
+
+        Falls back to the next model only while nothing has been yielded; once
+        text has reached the user, switching models would splice two answers.
+        """
         config = genai_types.GenerateContentConfig(
             **self._base_config(system_instruction=system_instruction, temperature=temperature)
         )
-        try:
-            stream = await self._client.aio.models.generate_content_stream(
-                model=self._settings.generation_model,
-                contents=prompt,
-                config=config,
-            )
-            async for chunk in stream:
-                fragment = chunk.text
-                if fragment:
-                    yield fragment
-        except Exception as exc:
-            _logger.warning("gemini_stream_failed", error=str(exc))
-            raise LlmUnavailableError(
-                "The answer could not be completed. Please try again.",
-                detail=str(exc),
-            ) from exc
+        last_error: BaseException | None = None
+        for model in self.models:
+            started = False
+            try:
+                stream = await self._client.aio.models.generate_content_stream(
+                    model=model, contents=prompt, config=config
+                )
+                async for chunk in stream:
+                    fragment = chunk.text
+                    if fragment:
+                        started = True
+                        yield fragment
+                if started:
+                    return
+                last_error = ValueError("Model returned an empty stream.")
+            except Exception as exc:
+                last_error = exc
+                _logger.warning("gemini_stream_failed", model=model, error=str(exc))
+                if started:
+                    break
+
+        raise LlmUnavailableError(
+            "The answer could not be completed. Please try again.",
+            detail=str(last_error),
+        )
 
     # ------------------------------------------------------------- embedding
     async def embed(
