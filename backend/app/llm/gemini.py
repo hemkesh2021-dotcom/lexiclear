@@ -82,7 +82,8 @@ def backoff_delay(attempt: int) -> float:
     demand spike from being prolonged by everyone retrying in lock-step.
     """
     ceiling = min(_RETRY_MAX_DELAY_SECONDS, _RETRY_BASE_DELAY_SECONDS * (2**attempt))
-    return random.uniform(ceiling / 2, ceiling)  # noqa: S311 - jitter, not cryptography
+    # Jitter only spaces retries apart; it has no security role.
+    return random.uniform(ceiling / 2, ceiling)  # noqa: S311  # nosec B311
 
 
 class GeminiProvider:

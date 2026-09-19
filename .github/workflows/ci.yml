@@ -105,7 +105,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install security tooling
-        run: pip install bandit[toml]==1.8.6 pip-audit==2.9.0
+        run: pip install "bandit[toml]==1.9.4" "pip-audit==2.9.0"
 
       - name: Static analysis (bandit)
         working-directory: backend
