@@ -14,11 +14,21 @@ export interface DocumentSession {
   submit: (file: File) => Promise<void>;
   /** Re-run analysis on the document already uploaded, without re-uploading. */
   retryAnalysis: () => Promise<void>;
+  /**
+   * Re-upload the current file after the server has forgotten it (expiry or
+   * restart), returning the new document id, or null if there is no file.
+   */
+  recover: () => Promise<string | null>;
   reset: () => Promise<void>;
 }
 
 /** Message shown when a failure carries no client-safe explanation. */
 const FALLBACK_ERROR = 'Something went wrong. Please try again.';
+
+/** Whether the server reported that the document is no longer held. */
+export function isExpired(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'document_not_found';
+}
 
 function messageFor(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -36,15 +46,17 @@ function messageFor(error: unknown): string {
  * to set state. The previous document is deleted from the server as soon as it
  * is replaced, rather than being left to expire.
  */
-export function useDocumentSession(
-  onAnnounce: (message: string) => void,
-): DocumentSession {
+export function useDocumentSession(onAnnounce: (message: string) => void): DocumentSession {
   const [phase, setPhase] = useState<SessionPhase>('idle');
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
   const [analysis, setAnalysis] = useState<DocumentAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const currentIdRef = useRef<string | null>(null);
+  // The browser keeps the file it already holds. Documents live only in
+  // server memory, so when they expire the page can restore them itself
+  // rather than leaving results on screen that nothing backs any more.
+  const fileRef = useRef<File | null>(null);
 
   const runAnalysis = useCallback(
     async (documentId: string, controller: AbortController) => {
@@ -68,6 +80,7 @@ export function useDocumentSession(
 
       const previousId = currentIdRef.current;
       if (previousId) void deleteDocument(previousId);
+      fileRef.current = file;
 
       setError(null);
       setAnalysis(null);
@@ -95,8 +108,18 @@ export function useDocumentSession(
     [onAnnounce, runAnalysis],
   );
 
+  const recover = useCallback(async (): Promise<string | null> => {
+    const file = fileRef.current;
+    if (!file) return null;
+    onAnnounce('Your document had expired from memory. Restoring it.');
+    const uploaded = await uploadDocument(file);
+    currentIdRef.current = uploaded.document_id;
+    setSummary(uploaded);
+    return uploaded.document_id;
+  }, [onAnnounce]);
+
   const retryAnalysis = useCallback(async () => {
-    const documentId = currentIdRef.current;
+    let documentId = currentIdRef.current;
     if (!documentId) return;
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -105,7 +128,14 @@ export function useDocumentSession(
     setPhase('analysing');
     onAnnounce('Trying the analysis again.');
     try {
-      await runAnalysis(documentId, controller);
+      try {
+        await runAnalysis(documentId, controller);
+      } catch (caught) {
+        if (!isExpired(caught)) throw caught;
+        documentId = await recover();
+        if (!documentId) throw caught;
+        await runAnalysis(documentId, controller);
+      }
     } catch (caught) {
       if (controller.signal.aborted) return;
       const message = messageFor(caught);
@@ -113,12 +143,13 @@ export function useDocumentSession(
       setPhase('error');
       onAnnounce(`Something went wrong. ${message}`);
     }
-  }, [onAnnounce, runAnalysis]);
+  }, [onAnnounce, recover, runAnalysis]);
 
   const reset = useCallback(async () => {
     abortRef.current?.abort();
     const documentId = currentIdRef.current;
     currentIdRef.current = null;
+    fileRef.current = null;
     setPhase('idle');
     setSummary(null);
     setAnalysis(null);
@@ -127,5 +158,14 @@ export function useDocumentSession(
     if (documentId) await deleteDocument(documentId);
   }, [onAnnounce]);
 
-  return { phase, summary, analysis, error, submit, retryAnalysis, reset };
+  return {
+    phase,
+    summary,
+    analysis,
+    error,
+    submit,
+    retryAnalysis,
+    recover,
+    reset,
+  };
 }

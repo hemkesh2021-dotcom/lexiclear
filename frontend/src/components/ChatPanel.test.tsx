@@ -130,6 +130,57 @@ describe('ChatPanel', () => {
     });
   });
 
+  it('restores an expired document and answers without the person noticing', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: 'document_not_found', message: 'No longer available.' }),
+          { status: 404 },
+        ),
+      )
+      .mockResolvedValueOnce(answerStream());
+    const onDocumentExpired = vi.fn().mockResolvedValue('doc-restored');
+    render(
+      <main>
+        <ChatPanel documentId="doc-123" onAnnounce={vi.fn()} onDocumentExpired={onDocumentExpired} />
+      </main>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /How can this agreement be ended/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/three months notice/)).toBeInTheDocument();
+    });
+    expect(onDocumentExpired).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/documents/doc-restored/questions');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the expiry error when the document cannot be restored', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ code: 'document_not_found', message: 'No longer available.' }),
+        { status: 404 },
+      ),
+    );
+    render(
+      <main>
+        <ChatPanel
+          documentId="doc-123"
+          onAnnounce={vi.fn()}
+          onDocumentExpired={vi.fn().mockResolvedValue(null)}
+        />
+      </main>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /How can this agreement be ended/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('No longer available.');
+    });
+  });
+
   it('has no detectable accessibility violations', async () => {
     const { container } = renderPanel();
     await expectNoAxeViolations(container);

@@ -172,6 +172,81 @@ describe('useDocumentSession', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('re-uploads the same file when the server has forgotten the document', async () => {
+    let uploads = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/documents') {
+        uploads += 1;
+        return Promise.resolve(
+          new Response(JSON.stringify({ ...summaryFixture, document_id: `doc-${uploads}` }), {
+            status: 201,
+          }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(analysisFixture), { status: 200 }));
+    });
+    const { result } = renderHook(() => useDocumentSession(vi.fn()));
+    await act(async () => {
+      await result.current.submit(file());
+    });
+
+    let restored: string | null = null;
+    await act(async () => {
+      restored = await result.current.recover();
+    });
+
+    expect(restored).toBe('doc-2');
+    expect(result.current.summary?.document_id).toBe('doc-2');
+    expect(result.current.analysis).toEqual(analysisFixture);
+  });
+
+  it('retrying an analysis on an expired document restores it first', async () => {
+    let analysisCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/analysis')) {
+        analysisCalls += 1;
+        const expired = analysisCalls === 2;
+        return Promise.resolve(
+          expired
+            ? new Response(JSON.stringify({ code: 'document_not_found', message: 'Gone.' }), {
+                status: 404,
+              })
+            : analysisCalls === 1
+              ? new Response(JSON.stringify({ code: 'llm_unavailable', message: 'Busy.' }), {
+                  status: 503,
+                })
+              : new Response(JSON.stringify(analysisFixture), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(summaryFixture), { status: 201 }));
+    });
+    const { result } = renderHook(() => useDocumentSession(vi.fn()));
+    await act(async () => {
+      await result.current.submit(file());
+    });
+    await act(async () => {
+      await result.current.retryAnalysis();
+    });
+
+    expect(result.current.phase).toBe('ready');
+  });
+
+  it('cannot recover after the document was cleared', async () => {
+    happyPath();
+    const { result } = renderHook(() => useDocumentSession(vi.fn()));
+    await act(async () => {
+      await result.current.submit(file());
+    });
+    await act(async () => {
+      await result.current.reset();
+    });
+    let restored: string | null = 'unset';
+    await act(async () => {
+      restored = await result.current.recover();
+    });
+    expect(restored).toBeNull();
+  });
+
   it('returns to idle and clears everything on reset', async () => {
     happyPath();
     const { result } = renderHook(() => useDocumentSession(vi.fn()));

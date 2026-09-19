@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
-import { ApiError, streamAnswer } from '@/api/client';
+import { ApiError, streamAnswer, type AnswerStreamHandlers } from '@/api/client';
 import type { Citation, Exchange } from '@/api/types';
 import { Icon } from '@/components/Icon';
 import { StatusMessage } from '@/components/StatusMessage';
+import { isExpired } from '@/hooks/useDocumentSession';
 
 interface ChatPanelProps {
   readonly documentId: string;
   readonly onAnnounce: (message: string) => void;
+  /** Restores an expired document and returns its new id. */
+  readonly onDocumentExpired?: (() => Promise<string | null>) | undefined;
 }
 
 const SUGGESTIONS = [
@@ -33,7 +36,11 @@ function createId(): string {
  * stutter of single words - so the region announces the question immediately
  * and the completed answer once the stream closes.
  */
-export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.ReactElement {
+export function ChatPanel({
+  documentId,
+  onAnnounce,
+  onDocumentExpired,
+}: ChatPanelProps): React.ReactElement {
   const fieldId = useId();
   const hintId = useId();
   const [question, setQuestion] = useState('');
@@ -67,7 +74,13 @@ export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.Rea
       const id = createId();
       setExchanges((previous) => [
         ...previous,
-        { id, question: trimmed, answer: '', citations: [], status: 'streaming' },
+        {
+          id,
+          question: trimmed,
+          answer: '',
+          citations: [],
+          status: 'streaming',
+        },
       ]);
       setQuestion('');
       setIsStreaming(true);
@@ -76,29 +89,39 @@ export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.Rea
       let answer = '';
       let citations: readonly Citation[] = [];
 
+      const handlers: AnswerStreamHandlers = {
+        onCitations: (received) => {
+          citations = received;
+          update(id, { citations: received });
+        },
+        onToken: (fragment) => {
+          answer += fragment;
+          update(id, { answer });
+        },
+        onError: (message) => {
+          update(id, { status: 'error', error: message });
+          onAnnounce(`The answer could not be completed. ${message}`);
+        },
+        onDone: () => {
+          update(id, { status: 'complete' });
+          onAnnounce(
+            `Answer ready, citing ${citations.length} ${
+              citations.length === 1 ? 'passage' : 'passages'
+            }. ${answer}`,
+          );
+        },
+      };
+
       try {
-        await streamAnswer(documentId, trimmed, {
-          onCitations: (received) => {
-            citations = received;
-            update(id, { citations: received });
-          },
-          onToken: (fragment) => {
-            answer += fragment;
-            update(id, { answer });
-          },
-          onError: (message) => {
-            update(id, { status: 'error', error: message });
-            onAnnounce(`The answer could not be completed. ${message}`);
-          },
-          onDone: () => {
-            update(id, { status: 'complete' });
-            onAnnounce(
-              `Answer ready, citing ${citations.length} ${
-                citations.length === 1 ? 'passage' : 'passages'
-              }. ${answer}`,
-            );
-          },
-        });
+        try {
+          await streamAnswer(documentId, trimmed, handlers);
+        } catch (caught) {
+          // The request is refused before any event is sent, so a retry
+          // against the restored document cannot duplicate partial output.
+          const restoredId = isExpired(caught) ? await onDocumentExpired?.() : null;
+          if (!restoredId) throw caught;
+          await streamAnswer(restoredId, trimmed, handlers);
+        }
       } catch (caught) {
         const message =
           caught instanceof ApiError ? caught.message : 'The answer could not be completed.';
@@ -109,7 +132,7 @@ export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.Rea
         setIsStreaming(false);
       }
     },
-    [documentId, isStreaming, onAnnounce, update],
+    [documentId, isStreaming, onAnnounce, onDocumentExpired, update],
   );
 
   return (
@@ -153,8 +176,7 @@ export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.Rea
                   <details className="citations">
                     <summary className="citations__summary">
                       {exchange.citations.length} source{' '}
-                      {exchange.citations.length === 1 ? 'passage' : 'passages'} from your
-                      document
+                      {exchange.citations.length === 1 ? 'passage' : 'passages'} from your document
                     </summary>
                     {exchange.citations.map((citation) => (
                       <div key={`${citation.label}-${citation.start}`} className="citation">
@@ -201,8 +223,8 @@ export function ChatPanel({ documentId, onAnnounce }: ChatPanelProps): React.Rea
             }}
           />
           <p className="field__hint" id={hintId}>
-            Press Control and Enter, or Command and Enter, to send. Up to{' '}
-            {MAX_QUESTION_LENGTH} characters.
+            Press Control and Enter, or Command and Enter, to send. Up to {MAX_QUESTION_LENGTH}{' '}
+            characters.
           </p>
         </div>
 

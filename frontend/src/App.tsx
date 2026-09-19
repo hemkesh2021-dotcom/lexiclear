@@ -67,15 +67,18 @@ export function App(): React.ReactElement {
         {showResults ? (
           <div className="workspace">
             <AnalysisPanel analysis={analysis} summary={summary} onClear={handleClear} />
-            <ChatPanel documentId={summary.document_id} onAnnounce={announcer.announce} />
+            <ChatPanel
+              documentId={summary.document_id}
+              onAnnounce={announcer.announce}
+              onDocumentExpired={session.recover}
+            />
           </div>
         ) : (
           <div className="stack">
             <p>
-              LexiClear reads the document you upload, explains it in plain language, and
-              points out the clauses that deserve your attention. Every finding quotes your
-              document word for word; anything it cannot quote is discarded rather than
-              shown.
+              LexiClear reads the document you upload, explains it in plain language, and points out
+              the clauses that deserve your attention. Every finding quotes your document word for
+              word; anything it cannot quote is discarded rather than shown.
             </p>
             <UploadPanel
               phase={session.phase}
@@ -89,9 +92,9 @@ export function App(): React.ReactElement {
 
       <footer className="app__footer">
         <p>
-          LexiClear provides general information to help you understand a document. It is
-          not legal advice and does not create a lawyer-client relationship. Documents are
-          held in memory for 30 minutes and are never written to disk.
+          LexiClear provides general information to help you understand a document. It is not legal
+          advice and does not create a lawyer-client relationship. Documents are held in memory for
+          30 minutes and are never written to disk.
         </p>
       </footer>
     </div>
