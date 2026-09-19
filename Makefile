@@ -16,7 +16,7 @@ install: ## Install backend and frontend dependencies
 dev: ## Run the API and the web client with hot reload
 	@echo "API      http://127.0.0.1:8000/api/docs"
 	@echo "Frontend http://127.0.0.1:5173"
-	cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000 & \
+	cd backend && .venv/bin/uvicorn app.main:app --reload --reload-dir app --port 8000 & \
 	cd frontend && npm run dev
 
 test: ## Run every unit and integration test

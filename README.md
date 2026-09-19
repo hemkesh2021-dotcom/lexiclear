@@ -109,12 +109,22 @@ deterministic stand-in with no API key and no network call.
 
 ### Quick start
 
+Requires Python 3.11+ and Node 22.22+ (`nvm use` picks the right Node from `.nvmrc`).
+
 ```bash
-git clone <your-repo-url> && cd lexiclear
-cp .env.example .env          # add your key from https://aistudio.google.com/apikey
-make install
-make dev                      # API on :8000, web client on :5173
+git clone https://github.com/hemkesh2021-dotcom/lexiclear.git
+cd lexiclear
+cp .env.example .env
 ```
+
+Put your key from https://aistudio.google.com/apikey into `LEXICLEAR_GOOGLE_API_KEY` in `.env`, then:
+
+```bash
+make install
+make dev
+```
+
+The API runs on http://127.0.0.1:8000/api/docs and the web client on http://127.0.0.1:5173.
 
 ### Without an API key
 
@@ -128,8 +138,10 @@ LEXICLEAR_LLM_PROVIDER=mock make dev
 ### Container
 
 ```bash
-make run                      # builds and serves on http://localhost:8000
+make run
 ```
+
+Builds the image and serves it on http://localhost:8000.
 
 Deployment to Hugging Face Spaces or Vercel: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
