@@ -36,3 +36,6 @@ backend/app/static/
 
 # Python build metadata
 *.egg-info/
+
+# Screenshots never belong in the sample documents
+samples/*.png
