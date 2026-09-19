@@ -134,3 +134,35 @@ class TestContentAddressing:
         store = DocumentStore(ttl_seconds=60, max_documents=5)
         with pytest.raises(ValueError, match="embeddings or a retriever"):
             await store.add(filename="a.txt", text="x", chunks=[], page_count=1, truncated=False)
+
+
+class TestContentIndexHygiene:
+    """The content index never outlives the documents it points at."""
+
+    async def test_deleting_a_document_removes_it_from_the_content_index(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        document = await add(store)
+        await store.delete(document.document_id)
+        assert await store.find_by_content(document.content_hash) is None
+        assert store._by_content == {}
+
+    async def test_eviction_for_capacity_cleans_the_content_index(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=1)
+        first = await add(store, "a.txt")
+        second = await add(store, "b.txt")
+        expected_index = {second.content_hash: [second.document_id]}
+        assert await store.find_by_content(first.content_hash) is second
+        assert store._by_content == expected_index
+
+    async def test_expiry_pops_only_what_has_expired(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        start = time.monotonic()
+        with patch("app.services.store.time.monotonic", return_value=start):
+            old = await add(store, "old.txt")
+        with patch("app.services.store.time.monotonic", return_value=start + 30):
+            young = await add(store, "young.txt")
+        with patch("app.services.store.time.monotonic", return_value=start + 61):
+            assert await store.size() == 1
+            assert (await store.get(young.document_id)) is young
+            with pytest.raises(DocumentNotFoundError):
+                await store.get(old.document_id)

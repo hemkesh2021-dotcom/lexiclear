@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { ApiError, streamAnswer, type AnswerStreamHandlers } from '@/api/client';
 import type { Citation, Exchange } from '@/api/types';
@@ -25,6 +25,58 @@ const MAX_QUESTION_LENGTH = 1000;
 function createId(): string {
   return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * One question and its answer.
+ *
+ * Memoised because the transcript re-renders on every streamed token and on
+ * every keystroke in the composer. Updates replace only the exchange that
+ * changed, so earlier exchanges keep their object identity and skip rendering
+ * entirely: the cost of a token is one list item, not the whole conversation.
+ */
+const ExchangeItem = memo(function ExchangeItem({
+  exchange,
+}: {
+  readonly exchange: Exchange;
+}): React.ReactElement {
+  return (
+    <li className="exchange">
+      <p className="exchange__question">
+        <span className="visually-hidden">You asked: </span>
+        {exchange.question}
+      </p>
+
+      {exchange.status === 'error' ? (
+        <p className="exchange__error" role="alert">
+          {exchange.error}
+        </p>
+      ) : (
+        <p className="exchange__answer">
+          <span className="visually-hidden">Answer: </span>
+          {exchange.answer}
+          {exchange.status === 'streaming' && exchange.answer === '' && (
+            <span className="panel__hint">Searching the document…</span>
+          )}
+        </p>
+      )}
+
+      {exchange.citations.length > 0 && (
+        <details className="citations">
+          <summary className="citations__summary">
+            {exchange.citations.length} source{' '}
+            {exchange.citations.length === 1 ? 'passage' : 'passages'} from your document
+          </summary>
+          {exchange.citations.map((citation) => (
+            <div key={`${citation.label}-${citation.start}`} className="citation">
+              <span className="citation__label">{citation.label}</span>
+              <span>{citation.quote}</span>
+            </div>
+          ))}
+        </details>
+      )}
+    </li>
+  );
+});
 
 /**
  * Grounded question-and-answer over the uploaded document.
@@ -152,41 +204,7 @@ export function ChatPanel({
         ) : (
           <ul className="stack" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {exchanges.map((exchange) => (
-              <li key={exchange.id} className="exchange">
-                <p className="exchange__question">
-                  <span className="visually-hidden">You asked: </span>
-                  {exchange.question}
-                </p>
-
-                {exchange.status === 'error' ? (
-                  <p className="exchange__error" role="alert">
-                    {exchange.error}
-                  </p>
-                ) : (
-                  <p className="exchange__answer">
-                    <span className="visually-hidden">Answer: </span>
-                    {exchange.answer}
-                    {exchange.status === 'streaming' && exchange.answer === '' && (
-                      <span className="panel__hint">Searching the document…</span>
-                    )}
-                  </p>
-                )}
-
-                {exchange.citations.length > 0 && (
-                  <details className="citations">
-                    <summary className="citations__summary">
-                      {exchange.citations.length} source{' '}
-                      {exchange.citations.length === 1 ? 'passage' : 'passages'} from your document
-                    </summary>
-                    {exchange.citations.map((citation) => (
-                      <div key={`${citation.label}-${citation.start}`} className="citation">
-                        <span className="citation__label">{citation.label}</span>
-                        <span>{citation.quote}</span>
-                      </div>
-                    ))}
-                  </details>
-                )}
-              </li>
+              <ExchangeItem key={exchange.id} exchange={exchange} />
             ))}
           </ul>
         )}

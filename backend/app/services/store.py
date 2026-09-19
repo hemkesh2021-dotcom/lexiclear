@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import secrets
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -94,6 +94,12 @@ class DocumentStore:
         self._ttl_seconds = ttl_seconds
         self._max_documents = max_documents
         self._documents: OrderedDict[str, StoredDocument] = OrderedDict()
+        #: content hash -> identifiers holding that content, for O(1) reuse lookup.
+        self._by_content: dict[str, list[str]] = {}
+        #: (created_at, id) in insertion order. Creation times only increase, so
+        #: expired documents are always at the left: eviction pops them without
+        #: scanning the whole store on every request.
+        self._expiry: deque[tuple[float, str]] = deque()
         self._lock = asyncio.Lock()
 
     async def add(
@@ -150,10 +156,12 @@ class DocumentStore:
         async with self._lock:
             self._evict_expired()
             if len(self._documents) >= self._max_documents:
-                self._documents.popitem(last=False)
+                self._forget(next(iter(self._documents)))
             if len(self._documents) >= self._max_documents:  # pragma: no cover - defensive
                 raise CapacityError("The service is at capacity. Please try again shortly.")
             self._documents[document.document_id] = document
+            self._by_content.setdefault(document.content_hash, []).append(document_id)
+            self._expiry.append((document.created_at, document_id))
 
         return document
 
@@ -192,9 +200,8 @@ class DocumentStore:
         async with self._lock:
             self._evict_expired()
             matches = [
-                document
-                for document in self._documents.values()
-                if document.content_hash == content_hash
+                self._documents[document_id]
+                for document_id in self._by_content.get(content_hash, ())
             ]
         for document in reversed(matches):
             if document.analysis is not None:
@@ -204,7 +211,7 @@ class DocumentStore:
     async def delete(self, document_id: str) -> None:
         """Remove a document immediately, if present."""
         async with self._lock:
-            self._documents.pop(document_id, None)
+            self._forget(document_id)
 
     async def size(self) -> int:
         """Return the number of unexpired documents currently held."""
@@ -215,10 +222,17 @@ class DocumentStore:
     def _evict_expired(self) -> None:
         """Drop every document whose TTL has elapsed. Caller must hold the lock."""
         cutoff = time.monotonic() - self._ttl_seconds
-        expired = [
-            document_id
-            for document_id, document in self._documents.items()
-            if document.created_at < cutoff
-        ]
-        for document_id in expired:
-            del self._documents[document_id]
+        while self._expiry and self._expiry[0][0] < cutoff:
+            _, document_id = self._expiry.popleft()
+            self._forget(document_id)  # a no-op if it was already evicted or deleted
+
+    def _forget(self, document_id: str) -> None:
+        """Remove a document and its content-index entry. Caller must hold the lock."""
+        document = self._documents.pop(document_id, None)
+        if document is None:
+            return
+        holders = self._by_content.get(document.content_hash)
+        if holders is not None:
+            holders.remove(document_id)
+            if not holders:
+                del self._by_content[document.content_hash]

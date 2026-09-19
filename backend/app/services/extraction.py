@@ -24,6 +24,9 @@ from app.security.file_validation import DocumentFormat, ValidatedUpload
 _HORIZONTAL_WHITESPACE = re.compile(r"[ \t\r\f\v]+")
 _EXCESS_NEWLINES = re.compile(r"\n{3,}")
 _MIN_USEFUL_CHARACTERS = 40
+#: Raw characters read per retained character, allowing for whitespace that
+#: normalisation later collapses.
+_EXTRACTION_MARGIN = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,15 +53,28 @@ def normalise_whitespace(raw: str) -> str:
     return _EXCESS_NEWLINES.sub("\n\n", collapsed).strip()
 
 
-def _extract_pdf(content: bytes) -> tuple[str, int]:
-    """Extract text from a PDF payload."""
+def _extract_pdf(content: bytes, character_budget: int) -> tuple[str, int]:
+    """Extract text from a PDF payload, stopping once ``character_budget`` is met.
+
+    Text extraction dominates the cost of reading a PDF, and anything beyond
+    the retention ceiling is discarded anyway, so pages past the budget are
+    never parsed. The page count still reports the whole document.
+    """
     try:
         reader = PdfReader(io.BytesIO(content))
         if reader.is_encrypted:
             raise DocumentExtractionError(
                 "This PDF is password protected. Please upload an unlocked copy."
             )
-        pages = [page.extract_text() or "" for page in reader.pages]
+        page_count = len(reader.pages)
+        pages: list[str] = []
+        collected = 0
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            pages.append(text)
+            collected += len(text)
+            if collected > character_budget:
+                break
     except DocumentExtractionError:
         raise
     except (PdfReadError, ValueError, OSError) as exc:
@@ -66,10 +82,10 @@ def _extract_pdf(content: bytes) -> tuple[str, int]:
             "This PDF could not be read. It may be corrupted.",
             detail=str(exc),
         ) from exc
-    return "\n\n".join(pages), len(pages)
+    return "\n\n".join(pages), page_count
 
 
-def _extract_docx(content: bytes) -> tuple[str, int]:
+def _extract_docx(content: bytes, character_budget: int) -> tuple[str, int]:
     """Extract paragraph and table text from a DOCX payload."""
     try:
         document = docx.Document(io.BytesIO(content))
@@ -79,7 +95,15 @@ def _extract_docx(content: bytes) -> tuple[str, int]:
             detail=str(exc),
         ) from exc
 
-    blocks = [paragraph.text for paragraph in document.paragraphs]
+    # The XML is parsed up front by python-docx, but walking and copying the
+    # paragraphs still stops once the retention budget is covered.
+    blocks: list[str] = []
+    collected = 0
+    for paragraph in document.paragraphs:
+        blocks.append(paragraph.text)
+        collected += len(paragraph.text)
+        if collected > character_budget:
+            return "\n\n".join(blocks), 1
     for table in document.tables:
         for row in table.rows:
             cells = [cell.text.strip() for cell in row.cells]
@@ -88,8 +112,9 @@ def _extract_docx(content: bytes) -> tuple[str, int]:
     return "\n\n".join(blocks), 1
 
 
-def _extract_text(content: bytes) -> tuple[str, int]:
+def _extract_text(content: bytes, character_budget: int) -> tuple[str, int]:
     """Decode a plain-text payload as UTF-8."""
+    del character_budget  # decoding is linear and cheap; truncation happens later
     return content.decode("utf-8", errors="replace"), 1
 
 
@@ -113,7 +138,10 @@ def extract_document(upload: ValidatedUpload, *, max_characters: int) -> Extract
         DocumentFormat.DOCX: _extract_docx,
         DocumentFormat.TEXT: _extract_text,
     }
-    raw, page_count = extractors[upload.document_format](upload.content)
+    # Raw text carries extra whitespace that normalisation removes, so read a
+    # margin past the ceiling to keep truncation exact after normalising.
+    budget = max_characters * _EXTRACTION_MARGIN
+    raw, page_count = extractors[upload.document_format](upload.content, budget)
     text = normalise_whitespace(raw)
 
     if len(text) < _MIN_USEFUL_CHARACTERS:

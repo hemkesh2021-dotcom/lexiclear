@@ -204,8 +204,16 @@ as few of them as possible:
   in a worker thread, so a large upload never stalls other users' streams.
 - **Bounded fan-out.** Embedding batches run concurrently, capped by
   `embedding_max_concurrency`, so one long document cannot exhaust the quota.
-- **Index built once.** BM25 statistics and normalised embeddings are computed
-  at upload; a question costs one query embedding and two vector operations.
+- **Index built once, as an inverted index.** Each term's BM25 weight in each
+  chunk is precomputed at upload. Scoring a question is one vectorised addition
+  per query term over only the chunks that contain it, plus one matrix-vector
+  product for the semantic side; ranking uses `np.lexsort`, not a Python sort.
+- **Bounded extraction.** PDF pages past the retention ceiling are never parsed:
+  a 500-page upload costs what its first few pages cost.
+- **Constant-time bookkeeping.** Content lookups go through a hash index, and
+  TTL expiry pops from a creation-ordered queue instead of scanning the store.
+- **Memoised transcript.** Each chat exchange is a memoised component, so a
+  streamed token re-renders one list item rather than the whole conversation.
 - **Cache-friendly delivery.** Fingerprinted assets are served
   `immutable` for a year and compressed with gzip; only the HTML shell is
   revalidated, so repeat visits download nothing but the shell.

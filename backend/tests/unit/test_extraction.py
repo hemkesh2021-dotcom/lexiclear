@@ -53,3 +53,47 @@ class TestPdfDocuments:
     def test_a_corrupt_pdf_is_rejected(self):
         with pytest.raises(DocumentExtractionError):
             extract(b"%PDF-1.4\nthis is not a real pdf body", "broken.pdf")
+
+
+class TestExtractionBudget:
+    """Pages past the retention ceiling are never parsed."""
+
+    def test_pdf_pages_beyond_the_budget_are_not_extracted(self, minimal_pdf, monkeypatch):
+        from types import SimpleNamespace
+
+        parsed: list[int] = []
+
+        def page(number: int) -> SimpleNamespace:
+            def extract_text() -> str:
+                parsed.append(number)
+                return f"Clause {number}. " + "The tenant shall pay rent. " * 20
+
+            return SimpleNamespace(extract_text=extract_text)
+
+        pages = [page(number) for number in range(50)]
+        monkeypatch.setattr(
+            "app.services.extraction.PdfReader",
+            lambda _stream: SimpleNamespace(is_encrypted=False, pages=pages),
+        )
+        result = extract(minimal_pdf, "long.pdf", max_characters=1_000)
+
+        assert result.truncated
+        assert len(result.text) == 1_000
+        assert result.page_count == 50, "the page count still describes the whole file"
+        assert len(parsed) < 5, f"parsed {len(parsed)} of 50 pages for a 1,000-character budget"
+
+    def test_docx_paragraphs_beyond_the_budget_are_not_copied(self):
+        import io
+
+        import docx
+
+        document = docx.Document()
+        for number in range(200):
+            document.add_paragraph(f"{number}. The employee shall give written notice. " * 5)
+        buffer = io.BytesIO()
+        document.save(buffer)
+
+        result = extract(buffer.getvalue(), "long.docx", max_characters=2_000)
+        assert result.truncated
+        assert len(result.text) == 2_000
+        assert "199." not in result.text

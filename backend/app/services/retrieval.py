@@ -68,23 +68,43 @@ class RetrievedChunk:
 
 
 class Bm25Index:
-    """A compact Okapi BM25 index over a fixed set of chunks."""
+    """A compact Okapi BM25 index over a fixed set of chunks.
+
+    Everything that does not depend on the query is computed once, at upload:
+    each term maps to a *posting* - the chunks containing it and the term's full
+    BM25 weight in each. Scoring a query is then one vectorised addition per
+    query term, touching only the chunks that contain it, instead of a Python
+    loop over every chunk for every term.
+    """
 
     def __init__(self, chunks: list[Chunk]) -> None:
-        """Build term frequencies and inverse document frequencies."""
-        self._documents = [tokenise(chunk.text) for chunk in chunks]
-        self._frequencies = [Counter(tokens) for tokens in self._documents]
-        self._lengths = np.array([len(tokens) for tokens in self._documents], dtype=np.float64)
-        self._average_length = float(self._lengths.mean()) if len(self._lengths) else 0.0
+        """Build the inverted index with precomputed per-chunk term weights."""
+        self._chunk_count = len(chunks)
+        frequencies = [Counter(tokenise(chunk.text)) for chunk in chunks]
+        lengths = np.array([sum(counts.values()) for counts in frequencies], dtype=np.float64)
+        average_length = float(lengths.mean()) if len(lengths) else 0.0
 
-        document_count = len(self._documents)
-        appearances: Counter[str] = Counter()
-        for frequencies in self._frequencies:
-            appearances.update(frequencies.keys())
-        self._idf = {
-            term: math.log(1.0 + (document_count - count + 0.5) / (count + 0.5))
-            for term, count in appearances.items()
-        }
+        # Per-chunk length normaliser, K1 * (1 - B + B * |d| / avgdl).
+        normalisers = (
+            _BM25_K1 * (1 - _BM25_B + _BM25_B * lengths / average_length)
+            if average_length > 0
+            else np.zeros_like(lengths)
+        )
+
+        raw_postings: dict[str, tuple[list[int], list[int]]] = {}
+        for index, counts in enumerate(frequencies):
+            for term, count in counts.items():
+                chunk_ids, term_counts = raw_postings.setdefault(term, ([], []))
+                chunk_ids.append(index)
+                term_counts.append(count)
+
+        self._postings: dict[str, tuple[npt.NDArray[np.intp], npt.NDArray[np.float64]]] = {}
+        for term, (chunk_ids, term_counts) in raw_postings.items():
+            ids = np.array(chunk_ids, dtype=np.intp)
+            tf = np.array(term_counts, dtype=np.float64)
+            idf = math.log(1.0 + (self._chunk_count - len(ids) + 0.5) / (len(ids) + 0.5))
+            weights = idf * tf * (_BM25_K1 + 1) / (tf + normalisers[ids])
+            self._postings[term] = (ids, weights)
 
     def score(self, query: str) -> npt.NDArray[np.float64]:
         """Score every chunk against ``query``.
@@ -95,22 +115,12 @@ class Bm25Index:
         Returns:
             One BM25 score per chunk, in chunk order.
         """
-        scores = np.zeros(len(self._documents), dtype=np.float64)
-        if self._average_length == 0.0:
-            return scores
-
+        scores = np.zeros(self._chunk_count, dtype=np.float64)
         for term in tokenise(query):
-            idf = self._idf.get(term)
-            if idf is None:
-                continue
-            for index, frequencies in enumerate(self._frequencies):
-                frequency = frequencies.get(term, 0)
-                if frequency == 0:
-                    continue
-                normaliser = _BM25_K1 * (
-                    1 - _BM25_B + _BM25_B * self._lengths[index] / self._average_length
-                )
-                scores[index] += idf * frequency * (_BM25_K1 + 1) / (frequency + normaliser)
+            posting = self._postings.get(term)
+            if posting is not None:
+                ids, weights = posting
+                scores[ids] += weights  # ids are unique within a posting
         return scores
 
 
@@ -195,8 +205,9 @@ class HybridRetriever:
 
         # Ties break on chunk order, so the same query always returns the same
         # passages in the same order - a property the snapshot tests rely on.
-        ordered = sorted(range(len(self._chunks)), key=lambda index: (-fused[index], index))
+        # np.lexsort sorts by its last key first: descending score, then index.
+        ordered = np.lexsort((np.arange(len(fused)), -fused))[:top_k]
         return [
             RetrievedChunk(chunk=self._chunks[index], score=round(float(fused[index]), 6))
-            for index in ordered[:top_k]
+            for index in ordered.tolist()
         ]

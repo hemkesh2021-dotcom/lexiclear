@@ -83,3 +83,44 @@ class TestHybridRetrieval:
             query="rent", query_embedding=np.zeros(768, dtype=np.float32), top_k=3
         )
         assert len(results) == 3
+
+
+class TestBm25Equivalence:
+    """The inverted index must score exactly as textbook Okapi BM25 does."""
+
+    @staticmethod
+    def reference_scores(chunks, query):
+        import math
+        from collections import Counter
+
+        documents = [tokenise(chunk.text) for chunk in chunks]
+        frequencies = [Counter(tokens) for tokens in documents]
+        lengths = [len(tokens) for tokens in documents]
+        average = sum(lengths) / len(lengths)
+        k1, b = 1.5, 0.75
+        scores = [0.0] * len(chunks)
+        for term in tokenise(query):
+            containing = sum(1 for counts in frequencies if term in counts)
+            if not containing:
+                continue
+            idf = math.log(1 + (len(chunks) - containing + 0.5) / (containing + 0.5))
+            for index, counts in enumerate(frequencies):
+                tf = counts.get(term, 0)
+                if tf:
+                    norm = k1 * (1 - b + b * lengths[index] / average)
+                    scores[index] += idf * tf * (k1 + 1) / (tf + norm)
+        return scores
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "security deposit refund",
+            "terminate terminate notice",  # a repeated term counts twice
+            "clause 7",
+            "words that appear nowhere",
+        ],
+    )
+    def test_scores_match_the_reference_implementation(self, chunks, query):
+        expected = self.reference_scores(chunks, query)
+        actual = Bm25Index(chunks).score(query)
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
