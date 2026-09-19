@@ -63,8 +63,10 @@ class FakeModels:
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
+        _env_file=None,
         llm_provider="gemini",
         google_api_key="test-key-not-a-real-secret",
+        fallback_models=(),
         embedding_batch_size=2,
         llm_timeout_seconds=0.2,
     )
@@ -181,6 +183,28 @@ class TestEmbedding:
         )
         assert len(vectors) == 5
         assert [len(batch) for batch in models.embed_batches] == [2, 2, 1]
+
+    async def test_concurrent_batches_are_bounded(self, settings, monkeypatch):
+        models = FakeModels()
+        in_flight = 0
+        peak = 0
+        original = models.embed_content
+
+        async def tracked(**kwargs):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            try:
+                return await original(**kwargs)
+            finally:
+                in_flight -= 1
+
+        monkeypatch.setattr(models, "embed_content", tracked)
+        bounded = settings.model_copy(update={"embedding_max_concurrency": 2})
+        provider = build(bounded, models, monkeypatch)
+        await provider.embed([f"passage {i}" for i in range(12)], task=EmbeddingTask.DOCUMENT)
+        assert peak == 2
 
     async def test_the_retrieval_task_type_is_propagated(self, settings, monkeypatch):
         models = FakeModels()
@@ -372,3 +396,9 @@ class TestStreamFallback:
             async for fragment in provider.generate_stream(system_instruction="s", prompt="p"):
                 seen.append(fragment)
         assert seen == ["partial from primary"]
+
+
+def test_the_shipped_defaults_include_fallback_models():
+    defaults = Settings(_env_file=None)
+    assert defaults.generation_model == "gemini-3.6-flash"
+    assert defaults.fallback_models == ("gemini-3.5-flash", "gemini-3.1-flash-lite")

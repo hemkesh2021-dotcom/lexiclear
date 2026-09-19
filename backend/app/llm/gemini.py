@@ -269,17 +269,20 @@ class GeminiProvider:
         batch_size = self._settings.embedding_batch_size
         batches = [list(texts[i : i + batch_size]) for i in range(0, len(texts), batch_size)]
 
-        try:
-            responses = await asyncio.gather(
-                *(
-                    self._client.aio.models.embed_content(
-                        model=self._settings.embedding_model,
-                        contents=batch,
-                        config=config,
-                    )
-                    for batch in batches
+        # Batches run concurrently for latency, but bounded, so a long document
+        # does not fire every request at once and trip the per-minute quota.
+        semaphore = asyncio.Semaphore(self._settings.embedding_max_concurrency)
+
+        async def embed_batch(batch: list[str]) -> genai_types.EmbedContentResponse:
+            async with semaphore:
+                return await self._client.aio.models.embed_content(
+                    model=self._settings.embedding_model,
+                    contents=batch,
+                    config=config,
                 )
-            )
+
+        try:
+            responses = await asyncio.gather(*(embed_batch(batch) for batch in batches))
         except Exception as exc:
             _logger.warning("gemini_embed_failed", error=str(exc))
             raise LlmUnavailableError(

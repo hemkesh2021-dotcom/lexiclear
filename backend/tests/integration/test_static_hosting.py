@@ -53,6 +53,23 @@ class TestStaticHosting:
         assert response.status_code == 200
         assert "text/css" in response.headers["content-type"]
 
+    async def test_fingerprinted_assets_are_cached_immutably(self, built_client):
+        # Vite names every asset by its content hash, so the URL never changes
+        # meaning: repeat visits load the app with no asset requests at all.
+        response = await built_client.get("/assets/index.css")
+        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+    async def test_the_shell_is_always_revalidated(self, built_client):
+        # The shell names the current asset hashes; caching it would pin users
+        # to a stale release after a deploy.
+        for path in ("/", "/results/doc-123"):
+            assert (await built_client.get(path)).headers["cache-control"] == "no-cache"
+
+    async def test_a_missing_asset_is_not_cached(self, built_client):
+        response = await built_client.get("/assets/missing.js")
+        assert response.status_code == 404
+        assert "immutable" not in response.headers.get("cache-control", "")
+
     async def test_an_unknown_route_falls_back_to_the_shell(self, built_client):
         response = await built_client.get("/results/doc-123")
         assert response.status_code == 200

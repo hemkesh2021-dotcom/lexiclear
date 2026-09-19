@@ -9,11 +9,20 @@ available; see ``SECURITY.md`` for the trade-offs this implies.
 
 The store is a bounded LRU with TTL, guarded by an :class:`asyncio.Lock` so that
 concurrent requests cannot corrupt the ordering.
+
+Documents are also *content-addressed*: each carries a SHA-256 digest of its
+normalised text. Re-uploading a document that is still held (which the front
+end does automatically when a session expires, and which users do when they
+refresh) reuses the existing chunks, embeddings and analysis instead of paying
+for them again. Reuse happens only while an identical document is still held,
+and every upload still receives its own unguessable identifier, so one client can
+never read or delete another client's handle.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import secrets
 import time
 from collections import OrderedDict
@@ -42,14 +51,34 @@ class StoredDocument:
     page_count: int
     truncated: bool
     created_at: float
+    #: SHA-256 of the normalised text; the key for reusing expensive work.
+    content_hash: str = ""
     #: Cached analysis, computed lazily on first request and reused for the
     #: document's lifetime so revisiting the results costs no model call.
     analysis: DocumentAnalysis | None = field(default=None)
+    #: Serialises analysis so concurrent requests for one document share a
+    #: single model call instead of each starting their own.
+    analysis_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     @property
     def character_count(self) -> int:
         """Number of characters retained from the source document."""
         return len(self.text)
+
+
+def rebind_analysis(analysis: DocumentAnalysis, document_id: str) -> DocumentAnalysis:
+    """Return a copy of ``analysis`` addressed to ``document_id``.
+
+    Reused work must never carry the identifier of the document it came from:
+    that handle belongs to another client and would let them be tracked or
+    their document deleted.
+    """
+    return analysis.model_copy(update={"document_id": document_id})
+
+
+def content_digest(text: str) -> str:
+    """Return the SHA-256 hex digest that identifies a document's content."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class DocumentStore:
@@ -73,9 +102,11 @@ class DocumentStore:
         filename: str,
         text: str,
         chunks: list[Chunk],
-        embeddings: npt.NDArray[np.float32],
+        embeddings: npt.NDArray[np.float32] | None = None,
         page_count: int,
         truncated: bool,
+        retriever: HybridRetriever | None = None,
+        analysis: DocumentAnalysis | None = None,
     ) -> StoredDocument:
         """Index and store a document, returning its handle.
 
@@ -83,25 +114,37 @@ class DocumentStore:
             filename: Sanitised display name.
             text: The normalised document text.
             chunks: The document's chunks.
-            embeddings: Embedding matrix aligned with ``chunks``.
+            embeddings: Embedding matrix aligned with ``chunks``. Required
+                unless an existing ``retriever`` is supplied for reuse.
             page_count: Source page count, where the format reports one.
             truncated: Whether the text was truncated at the character ceiling.
+            retriever: An already-built index over identical content, reused
+                so the embeddings are neither recomputed nor re-indexed.
+            analysis: An analysis of identical content, reused as-is.
 
         Returns:
             The stored document, including its generated identifier.
 
         Raises:
             CapacityError: If the store is full of unexpired documents.
+            ValueError: If neither ``embeddings`` nor ``retriever`` is given.
         """
+        if retriever is None:
+            if embeddings is None:
+                raise ValueError("Either embeddings or a retriever must be supplied.")
+            retriever = HybridRetriever(chunks, embeddings)
+        document_id = secrets.token_urlsafe(_DOCUMENT_ID_BYTES)
         document = StoredDocument(
-            document_id=secrets.token_urlsafe(_DOCUMENT_ID_BYTES),
+            document_id=document_id,
             filename=filename,
             text=text,
             chunks=chunks,
-            retriever=HybridRetriever(chunks, embeddings),
+            retriever=retriever,
             page_count=page_count,
             truncated=truncated,
             created_at=time.monotonic(),
+            content_hash=content_digest(text),
+            analysis=rebind_analysis(analysis, document_id) if analysis else None,
         )
 
         async with self._lock:
@@ -136,6 +179,27 @@ class DocumentStore:
                 )
             self._documents.move_to_end(document_id)
             return document
+
+    async def find_by_content(self, content_hash: str) -> StoredDocument | None:
+        """Return a live document with identical content, preferring one already analysed.
+
+        Args:
+            content_hash: The :func:`content_digest` of the normalised text.
+
+        Returns:
+            A matching unexpired document, or ``None`` when there is none.
+        """
+        async with self._lock:
+            self._evict_expired()
+            matches = [
+                document
+                for document in self._documents.values()
+                if document.content_hash == content_hash
+            ]
+        for document in reversed(matches):
+            if document.analysis is not None:
+                return document
+        return matches[-1] if matches else None
 
     async def delete(self, document_id: str) -> None:
         """Remove a document immediately, if present."""

@@ -8,7 +8,7 @@ about it — using only your document, with citations.
 
 It provides information, not legal advice.
 
-> **Live demo:** _<add your deployed URL here>_
+> **Live demo:** https://lexiclear-6r91.onrender.com (free tier: the first visit after idle takes ~50 s to wake)
 > **Problem statement:** AI for Legal Assistance & Access — PromptWars: Virtual
 
 ---

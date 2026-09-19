@@ -46,8 +46,13 @@ class Settings(BaseSettings):
     llm_provider: LlmProviderName = "gemini"
     google_api_key: SecretStr = SecretStr("")
     generation_model: str = "gemini-3.6-flash"
-    # Tried in order when the primary model is overloaded or unavailable.
-    fallback_models: Annotated[tuple[str, ...], NoDecode] = ()
+    # Tried in order when the primary model is overloaded or unavailable. A
+    # same-family model first (separate capacity pool), then a lighter model,
+    # which is the most likely to have headroom during a demand spike.
+    fallback_models: Annotated[tuple[str, ...], NoDecode] = (
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+    )
     llm_max_retries: int = Field(default=3, ge=1, le=6)
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
@@ -69,6 +74,9 @@ class Settings(BaseSettings):
     chunk_overlap_characters: int = Field(default=200, ge=0)
     retrieval_top_k: int = Field(default=6, ge=1, le=50)
     embedding_batch_size: int = Field(default=32, ge=1, le=100)
+    #: Upper bound on embedding batches in flight at once, so one very long
+    #: document cannot burst past the API's per-minute quota by itself.
+    embedding_max_concurrency: int = Field(default=4, ge=1, le=16)
 
     # -- Security ----------------------------------------------------------
     # ``NoDecode`` hands the raw environment string to the validator below.

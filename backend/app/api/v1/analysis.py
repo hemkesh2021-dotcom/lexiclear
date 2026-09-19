@@ -6,6 +6,7 @@ from app.api.deps import AnalysisDep, StoreDep
 from app.core.security import limit_from_settings, limiter
 from app.schemas.analysis import DocumentAnalysis
 from app.schemas.common import ErrorResponse
+from app.services.store import rebind_analysis
 
 router = APIRouter(prefix="/documents", tags=["analysis"])
 
@@ -32,13 +33,20 @@ async def analyse_document(
     Every finding is verified against the document text before it is returned;
     findings the model could not ground in a verbatim quotation are discarded
     and counted in ``unverified_finding_count``. The result is cached for the
-    lifetime of the document so repeated views cost nothing.
+    lifetime of the document so repeated views cost nothing, and concurrent
+    requests for the same document share one model call.
     """
     del request, response  # Required by the rate limiter, unused by the handler.
     document = await store.get(document_id)
     if document.analysis is not None:
         return document.analysis
 
-    result = await analysis_service.analyse(document)
-    document.analysis = result
-    return result
+    async with document.analysis_lock:
+        # Re-check under the lock: a concurrent request may have finished first.
+        if document.analysis is None:
+            twin = await store.find_by_content(document.content_hash)
+            if twin is not None and twin.analysis is not None:
+                document.analysis = rebind_analysis(twin.analysis, document.document_id)
+            else:
+                document.analysis = await analysis_service.analyse(document)
+        return document.analysis

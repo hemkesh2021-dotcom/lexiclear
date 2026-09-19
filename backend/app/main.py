@@ -18,6 +18,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
+from starlette.types import Scope
 
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
@@ -126,6 +127,24 @@ def _register_exception_handlers(app: FastAPI) -> None:
         )
 
 
+#: Vite fingerprints every file under ``/assets`` with a content hash, so a
+#: given URL can never change: browsers and CDNs may keep it for a year.
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+#: The HTML shell names the current asset hashes, so it must be revalidated.
+REVALIDATE_CACHE = "no-cache"
+
+
+class ImmutableStaticFiles(StaticFiles):
+    """Static files served with a long-lived, immutable cache policy."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        """Serve the file and mark successful responses as immutable."""
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = IMMUTABLE_CACHE
+        return response
+
+
 def _mount_single_page_app(app: FastAPI, settings: Settings) -> None:
     """Serve the built front end, falling back to ``index.html`` for routes."""
     if not STATIC_DIRECTORY.is_dir():
@@ -135,7 +154,7 @@ def _mount_single_page_app(app: FastAPI, settings: Settings) -> None:
 
     app.mount(
         "/assets",
-        StaticFiles(directory=STATIC_DIRECTORY / "assets", check_dir=False),
+        ImmutableStaticFiles(directory=STATIC_DIRECTORY / "assets", check_dir=False),
         name="assets",
     )
     index_file = STATIC_DIRECTORY / "index.html"
@@ -164,8 +183,8 @@ def _mount_single_page_app(app: FastAPI, settings: Settings) -> None:
             and candidate.is_file()
             and candidate.is_relative_to(STATIC_DIRECTORY.resolve())
         ):
-            return FileResponse(candidate)
-        return FileResponse(index_file)
+            return FileResponse(candidate, headers={"Cache-Control": REVALIDATE_CACHE})
+        return FileResponse(index_file, headers={"Cache-Control": REVALIDATE_CACHE})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

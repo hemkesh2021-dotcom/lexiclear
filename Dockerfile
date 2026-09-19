@@ -33,7 +33,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG APP_UID=1000
 ARG PORT=7860
 ENV PORT=${PORT} \
-    HOME=/home/app
+    HOME=/home/app \
+    FORWARDED_ALLOW_IPS="127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+# X-Forwarded-For is honoured only when the connection comes from a private
+# network address, i.e. the hosting platform's own load balancer. A client on
+# the public internet cannot reach the container from those ranges, so it
+# cannot forge its address to slip past the per-client rate limits. uvicorn
+# reads FORWARDED_ALLOW_IPS directly; override it if your proxy differs.
 
 RUN set -eux; \
     apt-get update; \
@@ -64,4 +71,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # would serve requests that cannot see the first worker's documents. Scale by
 # running more containers behind a session-affine load balancer, or move the
 # store behind a shared cache first.
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1 --proxy-headers --forwarded-allow-ips='*' --no-server-header"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1 --proxy-headers --no-server-header"]

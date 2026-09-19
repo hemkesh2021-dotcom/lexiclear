@@ -188,7 +188,31 @@ network boundary from being dropped. There is a test for exactly that.
 
 ---
 
-## 9. Single origin
+## 9. Expensive work happens once per document, not once per request
+
+Model calls dominate both latency and cost, so the pipeline is arranged to make
+as few of them as possible:
+
+- **Content addressing.** Each document carries a SHA-256 of its normalised
+  text. Re-uploading content that is still held (the web client does this by
+  itself when a session expires) reuses the chunks, embedding index and
+  analysis: zero embedding calls, zero analysis calls. Each upload still gets
+  its own handle, and reused results are rebound to it.
+- **Single-flight analysis.** A per-document lock means five concurrent
+  analysis requests produce one model call, not five.
+- **Off-loop parsing.** PDF/DOCX extraction and chunking are CPU-bound and run
+  in a worker thread, so a large upload never stalls other users' streams.
+- **Bounded fan-out.** Embedding batches run concurrently, capped by
+  `embedding_max_concurrency`, so one long document cannot exhaust the quota.
+- **Index built once.** BM25 statistics and normalised embeddings are computed
+  at upload; a question costs one query embedding and two vector operations.
+- **Cache-friendly delivery.** Fingerprinted assets are served
+  `immutable` for a year and compressed with gzip; only the HTML shell is
+  revalidated, so repeat visits download nothing but the shell.
+
+---
+
+## 10. Single origin
 
 The container serves the API and the built web client from one process. This is
 not packaging convenience: it is what allows `default-src 'self'` with no
@@ -198,7 +222,7 @@ in development and production rather than being loosened for local work.
 
 ---
 
-## 10. Accessibility is a build gate, not a review step
+## 11. Accessibility is a build gate, not a review step
 
 `eslint-plugin-jsx-a11y` runs in **strict** mode with violations as errors.
 axe-core runs in the unit suite via a typed helper, and again in Playwright

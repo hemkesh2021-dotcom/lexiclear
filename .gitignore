@@ -33,3 +33,6 @@ blob-report/
 
 # Built web client, copied into the image by the Docker build
 backend/app/static/
+
+# Python build metadata
+*.egg-info/

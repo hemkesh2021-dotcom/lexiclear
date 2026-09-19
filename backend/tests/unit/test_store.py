@@ -109,3 +109,28 @@ class TestCapacity:
         await add(store, "c.txt")
         await add(store, "d.txt")
         assert (await store.get(first.document_id)).filename == "first.txt"
+
+
+class TestContentAddressing:
+    async def test_identical_content_is_found_by_its_digest(self):
+        from app.services.store import content_digest
+
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        document = await add(store)
+        assert await store.find_by_content(content_digest(document.text)) is document
+
+    async def test_unknown_content_is_not_found(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        await add(store)
+        assert await store.find_by_content("0" * 64) is None
+
+    async def test_expired_content_is_never_reused(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        document = await add(store)
+        with patch("app.services.store.time.monotonic", return_value=time.monotonic() + 61):
+            assert await store.find_by_content(document.content_hash) is None
+
+    async def test_a_document_needs_embeddings_or_a_retriever(self):
+        store = DocumentStore(ttl_seconds=60, max_documents=5)
+        with pytest.raises(ValueError, match="embeddings or a retriever"):
+            await store.add(filename="a.txt", text="x", chunks=[], page_count=1, truncated=False)

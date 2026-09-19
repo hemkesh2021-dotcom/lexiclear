@@ -19,6 +19,8 @@ Open a private security advisory on the repository rather than a public issue.
 | Resource exhaustion by upload size | Read with a one-byte overshoot and rejected before the body is materialised; 10 MB ceiling | `api/v1/documents.py` |
 | Resource exhaustion by document length | Text truncated at 400,000 characters, and the response says so | `services/extraction.py` |
 | Resource exhaustion by request volume | Per-address rate limits on all three model-backed endpoints | `core/security.py` |
+| Rate-limit evasion by forged `X-Forwarded-For` | Proxy headers trusted only from private-network peers (the platform load balancer), never from `*` | `Dockerfile` (`FORWARDED_ALLOW_IPS`) |
+| Handle leakage through reused work | Identical re-uploads reuse embeddings and analysis, but every upload gets a fresh 128-bit handle and reused results are rebound to it | `services/store.py` |
 | Memory exhaustion | Bounded LRU store with TTL eviction | `services/store.py` |
 | Prompt injection from document content | Labelled delimiters, forged delimiters neutralised, system instruction declares the block to be data | `security/prompt_guard.py` |
 | Prompt injection from user questions | Override phrasing refused before any model call | `security/prompt_guard.py` |
