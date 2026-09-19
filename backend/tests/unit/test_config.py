@@ -19,3 +19,22 @@ def test_the_key_is_read_from_the_root_env_file_whatever_the_cwd(tmp_path, monke
 
 def test_the_configured_env_file_setting_is_the_absolute_tuple():
     assert Settings.model_config["env_file"] == ENV_FILES
+
+
+def test_cors_origins_accept_a_comma_separated_env_value(monkeypatch):
+    monkeypatch.setenv("LEXICLEAR_CORS_ALLOW_ORIGINS", "http://a.example, http://b.example")
+    assert Settings(_env_file=None).cors_allow_origins == ("http://a.example", "http://b.example")
+
+
+def test_cors_origins_accept_a_single_env_value(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("LEXICLEAR_CORS_ALLOW_ORIGINS=http://localhost:5173\n")
+    assert Settings(_env_file=(env,)).cors_allow_origins == ("http://localhost:5173",)
+
+
+def test_the_shipped_env_example_parses_cleanly():
+    from app.core.config import ENV_FILES
+
+    example = ENV_FILES[0].with_name(".env.example")
+    settings = Settings(_env_file=(example,))
+    assert settings.cors_allow_origins

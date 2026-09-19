@@ -97,9 +97,9 @@ Shrink the window to phone width to show the reflow.
 
 Show `docs/ARCHITECTURE.md` or a diagram.
 
-> "Three Google AI services. Gemini 2.5 Flash in structured-output mode for the
+> "Three Google AI services. Gemini 3.6 Flash in structured-output mode for the
 > clause analysis — the JSON schema is enforced by the decoder, not by parsing
-> prose afterwards. Gemini 2.5 Flash again, streaming, for the answers.
+> prose afterwards. Gemini 3.6 Flash again, streaming, for the answers.
 > And gemini-embedding-001 at seven hundred and sixty-eight dimensions for
 > semantic retrieval, using separate task types for passages and queries."
 

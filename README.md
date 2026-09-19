@@ -80,7 +80,7 @@ FastAPI  ── security headers · per-address rate limits · typed error envel
    ├── Ingestion ──▶ magic-byte validation ▶ extraction ▶ clause-aware chunking
    │                 ▶ Gemini embeddings ▶ in-memory index (TTL, never on disk)
    │
-   ├── Analysis  ──▶ Gemini 2.5 Flash, structured output
+   ├── Analysis  ──▶ Gemini 3.6 Flash, structured output
    │                 ▶ quote verification against source ▶ unverifiable dropped
    │
    └── Q&A       ──▶ BM25 + dense hybrid retrieval ▶ Gemini streaming ▶ SSE
@@ -93,8 +93,8 @@ was rejected. [`SECURITY.md`](SECURITY.md) sets out the threat model.
 
 | Service | Model | Where |
 | --- | --- | --- |
-| **Gemini API** — text generation, structured output | `gemini-2.5-flash` | Clause analysis, summarisation, obligation extraction. JSON Schema is enforced by the decoder, not by parsing prose afterwards. |
-| **Gemini API** — text generation, streaming | `gemini-2.5-flash` | Grounded question answering, streamed over server-sent events. |
+| **Gemini API** — text generation, structured output | `gemini-3.6-flash` | Clause analysis, summarisation, obligation extraction. JSON Schema is enforced by the decoder, not by parsing prose afterwards. |
+| **Gemini API** — text generation, streaming | `gemini-3.6-flash` | Grounded question answering, streamed over server-sent events. |
 | **Gemini API** — embeddings | `gemini-embedding-001` @ 768 dimensions | Passage and query embeddings for semantic retrieval, using asymmetric `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` task types. |
 
 All access goes through the official `google-genai` SDK, confined to

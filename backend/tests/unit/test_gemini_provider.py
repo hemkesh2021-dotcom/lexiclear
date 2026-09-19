@@ -30,8 +30,10 @@ class FakeModels:
         self.embed_task_types: list[str] = []
 
     async def generate_content(self, *, model, contents, config):
-        del model, contents, config
+        del contents
         self.calls += 1
+        self.last_model = model
+        self.last_config = config
         if self.error is not None:
             raise self.error
         return SimpleNamespace(text=self.replies.pop(0) if self.replies else "")
@@ -207,3 +209,19 @@ class TestEmbedding:
         with pytest.raises(LlmUnavailableError) as caught:
             await provider.embed(["a"], task=EmbeddingTask.DOCUMENT)
         assert "12345" not in caught.value.message
+
+
+class TestGenerationConfig:
+    async def test_tool_calling_is_disabled_and_thinking_is_bounded(self, settings, monkeypatch):
+        models = FakeModels(replies=['{"ok": true}'])
+        provider = build(settings, models, monkeypatch)
+        await provider.generate_json(system_instruction="s", prompt="p", response_schema={})
+        assert models.last_config.automatic_function_calling.disable is True
+        assert models.last_config.thinking_config.thinking_level.value == "LOW"
+        assert models.last_config.response_mime_type == "application/json"
+
+    async def test_the_configured_model_is_used(self, settings, monkeypatch):
+        models = FakeModels(replies=["{}"])
+        provider = build(settings, models, monkeypatch)
+        await provider.generate_json(system_instruction="s", prompt="p", response_schema={})
+        assert models.last_model == settings.generation_model == "gemini-3.6-flash"

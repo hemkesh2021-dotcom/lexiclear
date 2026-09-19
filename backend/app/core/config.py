@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["development", "test", "production"]
 LlmProviderName = Literal["gemini", "mock"]
+ThinkingLevel = Literal["minimal", "low", "medium", "high"]
 
 #: ``.env`` locations, resolved from this file rather than the working
 #: directory, so settings load the same whether the server is started from the
@@ -44,11 +45,15 @@ class Settings(BaseSettings):
     # -- Large language model ---------------------------------------------
     llm_provider: LlmProviderName = "gemini"
     google_api_key: SecretStr = SecretStr("")
-    generation_model: str = "gemini-2.5-flash"
+    generation_model: str = "gemini-3.6-flash"
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
     llm_timeout_seconds: float = 60.0
-    llm_max_output_tokens: int = 4096
+    llm_max_output_tokens: int = 8192
+    # Gemini 3 models reason before answering, and those thinking tokens count
+    # against the output budget. Clause extraction is reading, not puzzle
+    # solving, so a low level keeps latency down without hurting quality.
+    llm_thinking_level: ThinkingLevel = "low"
 
     # -- Document handling -------------------------------------------------
     max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
@@ -63,7 +68,10 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=32, ge=1, le=100)
 
     # -- Security ----------------------------------------------------------
-    cors_allow_origins: tuple[str, ...] = ("http://localhost:5173",)
+    # ``NoDecode`` hands the raw environment string to the validator below.
+    # Without it pydantic-settings tries to JSON-decode any collection-typed
+    # variable first, so a plain "http://a,http://b" fails before it can be split.
+    cors_allow_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:5173",)
     rate_limit_uploads: str = "10/minute"
     rate_limit_analysis: str = "20/minute"
     rate_limit_questions: str = "40/minute"

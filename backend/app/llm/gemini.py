@@ -3,7 +3,7 @@
 Uses the ``google-genai`` SDK against the Gemini Developer API.  Two model
 families are used:
 
-* ``gemini-2.5-flash`` for clause analysis, summarisation and grounded answers.
+* ``gemini-3.6-flash`` for clause analysis, summarisation and grounded answers.
   Analysis calls use the SDK's *structured output* mode, so the schema is
   enforced by the decoding process rather than by parsing prose afterwards.
 * ``gemini-embedding-001`` for passage and query embeddings, truncated to 768
@@ -31,6 +31,10 @@ _logger = get_logger(__name__)
 #: describe disputes, penalties and liabilities, so the thresholds are not
 #: tightened further; the guardrail that matters here is the system instruction.
 _MAX_RETRIES = 3
+
+#: Automatic function calling is on by default in the SDK. LexiClear declares
+#: no tools, so leaving it on only adds a logged warning and per-call overhead.
+_NO_TOOL_CALLING = genai_types.AutomaticFunctionCallingConfig(disable=True)
 _RETRY_BASE_DELAY_SECONDS = 0.5
 
 
@@ -60,6 +64,18 @@ class GeminiProvider:
         """Identify the provider and generation model in health output."""
         return f"gemini:{self._settings.generation_model}"
 
+    def _base_config(self, *, system_instruction: str, temperature: float) -> dict[str, object]:
+        """Settings shared by every generation call."""
+        return {
+            "system_instruction": system_instruction,
+            "temperature": temperature,
+            "max_output_tokens": self._settings.llm_max_output_tokens,
+            "automatic_function_calling": _NO_TOOL_CALLING,
+            "thinking_config": genai_types.ThinkingConfig(
+                thinking_level=genai_types.ThinkingLevel(self._settings.llm_thinking_level.upper())
+            ),
+        }
+
     # ------------------------------------------------------------------ JSON
     async def generate_json(
         self,
@@ -71,9 +87,7 @@ class GeminiProvider:
     ) -> dict[str, Any]:
         """Generate a schema-constrained JSON response. See the protocol docstring."""
         config = genai_types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-            max_output_tokens=self._settings.llm_max_output_tokens,
+            **self._base_config(system_instruction=system_instruction, temperature=temperature),
             response_mime_type="application/json",
             response_schema=response_schema,
         )
@@ -149,9 +163,7 @@ class GeminiProvider:
     ) -> AsyncIterator[str]:
         """Stream a free-text reply. See the protocol docstring."""
         config = genai_types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-            max_output_tokens=self._settings.llm_max_output_tokens,
+            **self._base_config(system_instruction=system_instruction, temperature=temperature)
         )
         try:
             stream = await self._client.aio.models.generate_content_stream(
