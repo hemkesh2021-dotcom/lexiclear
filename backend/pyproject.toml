@@ -11,7 +11,7 @@ dependencies = [
     "fastapi==0.141.1",
     # Pinned above what FastAPI requires: the version it allows by default
     # still carries open advisories.
-    "starlette==1.6.0",
+    "starlette==1.7.0",
     "uvicorn[standard]==0.53.0",
     "pydantic==2.13.5",
     "pydantic-settings==2.15.0",
