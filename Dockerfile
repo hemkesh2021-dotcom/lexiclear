@@ -9,7 +9,7 @@
 # which matches the design: LexiClear never writes an uploaded document to disk.
 
 # ----------------------------------------------------------------- web build
-FROM node:22-alpine AS web
+FROM node:26-alpine AS web
 
 WORKDIR /build
 
